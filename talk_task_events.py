@@ -19,12 +19,14 @@ try:
     from .talk_outbox import HistoryOutbox
     from .talk_passive import HistoryOwner, digest, identifier, session_id
     from .talk_task_sources import (
+        NERVE_KIND,
         RunReference,
         TaskEventError,
         TaskObservation,
         api_poll_observation,
         hook_observation,
         integer,
+        nerve_observation,
         rpc_observations,
     )
 except ImportError:  # pragma: no cover - flat plugin load
@@ -32,12 +34,14 @@ except ImportError:  # pragma: no cover - flat plugin load
     from talk_outbox import HistoryOutbox
     from talk_passive import HistoryOwner, digest, identifier, session_id
     from talk_task_sources import (
+        NERVE_KIND,
         RunReference,
         TaskEventError,
         TaskObservation,
         api_poll_observation,
         hook_observation,
         integer,
+        nerve_observation,
         rpc_observations,
     )
 
@@ -605,6 +609,32 @@ class TaskEvents:
             self._touch_source(db, lease)
             return idx
 
+    def observe_nerve(self, token, lease, run_id, task_id, decision, *, live=False):
+        """Project one policy-admitted Nerve verdict through the canonical lane.
+
+        Same owner/lease/run fences and same delivery receipts as every other
+        task event, so an urgent verdict is claimed and spoken through Talk's
+        existing interruption arbitration rather than over live audio. A
+        duplicate Nerve receipt for the same decision is idempotent.
+        """
+
+        if lease.mode != "hook" or lease.run_id != run_id:
+            raise TaskEventError("unsupported")
+        with self._db(token) as db:
+            self._source(db, lease)
+            binding, _ = self._binding(db, run_id)
+            observation = nerve_observation(
+                observation_id=lease.source_id,
+                binding=binding,
+                task_id=task_id,
+                decision=decision,
+            )
+            if observation.session_id != lease.session_id:
+                raise TaskEventError("foreign_owner")
+            idx = self._append(db, token, lease, observation, live=live)
+            self._touch_source(db, lease)
+            return idx
+
     def source_unavailable(self, token, lease):
         with self._db(token) as db:
             self._source(db, lease)
@@ -701,6 +731,11 @@ class TaskEvents:
     @staticmethod
     def _speech_eligible(event, mode):
         state = event.get("state")
+        # A Nerve verdict carries its own policy level: WATCH stays silent, a
+        # REPLAN/review/BLOCK escalation is admitted under the same owner-set
+        # preference as any other update.
+        if event.get("kind") == NERVE_KIND:
+            return event.get("nerve_level") in {"notify", "urgent"} and mode != "completion"
         if state in {"completed", "failed", "cancelled", "lost"}:
             return True
         if mode != "completion" and (
