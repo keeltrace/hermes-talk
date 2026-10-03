@@ -27,9 +27,10 @@ Hard invariant: **Nerve is a watchdog/forecaster, not the final lifecycle author
 
 - `talk_nerve.py` — public bridge through `PluginContext.dispatch_tool`. It does not import Nerve internals or read Nerve databases.
 - `talk_nerve_tools.py` — conditional realtime tools: `nerve_status`, `nerve_explain`, `nerve_assess`, `nerve_request_review`.
-- `talk_nerve_policy.py` — deterministic quiet/notify/urgent policy and dedupe gate for future push announcements.
+- `talk_nerve_policy.py` — deterministic quiet/notify/urgent policy and dedupe gate for push announcements.
 - `talk_nerve_watch.py` — exact-task status watcher that only emits policy-admitted receipts; it never guesses a task by recency.
 - `talk_nerve_provider.py` — optional generic Hermes `TaskWorkerProvider` backed by Nerve's remote-worker tools. It registers only on a host exposing the canonical worker-provider API.
+- `TaskEvents.observe_nerve` — the canonical projection of a Nerve verdict into Talk's task-event and speech-receipt substrate. See "Voice behavior" below.
 - All four Nerve Talk tools are placed behind Talk's fresh-operator-speech permit in shared voice rooms. `nerve_status` and `nerve_explain` do not mutate Nerve, but their task/DoD state can be sensitive, so they are operator-gated rather than room-wide read-only tools. Status/explain require an exact canonical task ID.
 
 ## Deliberately unsupported instead of faked
@@ -57,6 +58,20 @@ plugins:
 
 The `host` is a **Nerve-configured alias**, not a raw SSH destination. Nerve's own `remote_hosts` allowlist remains authoritative.
 
-## Voice behavior target
+## Voice behavior
 
-Routine progress and WATCH should be silent. REPLAN should be a short notification. A review requirement, BLOCK/STOP_REQUESTED escalation, Definition-of-Done contradiction, blocked worker, or terminal failure should be urgent. Completion and an automatic bounded extension deserve one concise notice. The supplied `talk_nerve_policy.py` implements and tests those decisions, but the bundle does **not** wire ambient push speech into Talk's canonical task-event presentation path yet; see `LOCAL_HERMES_FINISH.md` in the bundle root.
+Routine progress and WATCH are silent. REPLAN is a short notification. A review requirement, BLOCK/STOP_REQUESTED escalation, Definition-of-Done contradiction, blocked worker, or terminal failure is urgent. Completion and an automatic bounded extension get one concise notice. `talk_nerve_policy.py` implements and tests those decisions.
+
+Those verdicts reach the operator through Talk's **canonical** task-event substrate, not a private speech callback. `TaskEvents.observe_nerve` takes a policy-admitted decision and reuses the same owner, lease and run fences and the same delivery/attempt receipts as every other task event:
+
+- correlation is by the exact task id the receipt was fetched for plus the run binding — never recency;
+- `quiet` is stored and projected but is never speech-eligible;
+- `notify`/`urgent` become ordinary candidates, so a single-active-speech claim arbitrates them and an escalation cannot talk over live audio;
+- a duplicate Nerve receipt for the same decision is idempotent;
+- reconnect never replays a spent escalation.
+
+`tests/test_nerve_projection.py` covers those races. Nerve or worker prose never reaches the speech queue: the label is plugin-owned wording bounded by the policy.
+
+## Worker selection
+
+The worker picker is not a hard-coded Hermes/Codex enum. Short labels the operator and model use are resolved to provider names from the host's own `linked_child_dispatch.external_workers` advertisement, so a new provider needs no change to the picker and the model is never offered a worker the host cannot prove it has. A label this build does not understand is a bad request; a label the host does not advertise is refused rather than retried as a different worker. The recipient projection recognizes any advertised Talk worker provider, so a Nerve worker is listed and steerable under the same ownership fences as a Codex one.

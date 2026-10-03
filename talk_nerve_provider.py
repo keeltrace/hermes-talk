@@ -198,9 +198,11 @@ def build_provider(ctx):
             return "rejected"
 
         def approvals(self):
-            # Current Nerve remote API does not expose remote Hermes approval
-            # requests. Fail closed rather than claiming none were required.
-            return []
+            # Nerve's remote API does not expose remote Hermes approval requests,
+            # so this provider CANNOT report whether any are pending. Returning an
+            # empty list would assert "none required" and let a caller proceed
+            # unapproved; refuse loudly instead. This matches approve() below.
+            raise ValueError("Nerve SSH worker approvals are not bridged by this adapter")
 
         def approve(self, request_id, choice):
             del request_id, choice
