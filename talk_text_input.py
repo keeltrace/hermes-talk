@@ -25,7 +25,7 @@ try:
     from . import talk_input_attachments
     from .talk_dashboard_gateway import DashboardTaskError
     from .talk_dashboard_store import bounded_text
-    from .talk_dashboard_tasks import CHILD_TOOLS, codex_worker_available
+    from .talk_dashboard_tasks import CHILD_TOOLS, known_worker_labels, worker_available
     from .talk_passive import HistoryError, identifier
     from .talk_recipients import DELIVERY_STATUSES, IDENTITY_FIELDS, RecipientError
     from .talk_run_control import control_output
@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - flat plugin load
     import talk_input_attachments
     from talk_dashboard_gateway import DashboardTaskError
     from talk_dashboard_store import bounded_text
-    from talk_dashboard_tasks import CHILD_TOOLS, codex_worker_available
+    from talk_dashboard_tasks import CHILD_TOOLS, known_worker_labels, worker_available
     from talk_passive import HistoryError, identifier
     from talk_recipients import DELIVERY_STATUSES, IDENTITY_FIELDS, RecipientError
     from talk_run_control import control_output
@@ -59,7 +59,6 @@ OPTIONAL_FIELDS = {
     "approval": (),
 }
 CHOICES = frozenset({"once", "session", "deny"})
-WORKERS = frozenset({"hermes", "codex"})
 TERMINAL_RUNS = frozenset({"completed", "failed", "cancelled", "lost"})
 SETTLED_ACTIONS = frozenset({"returned", "accepted", "failed"})
 OPEN_DELIVERIES = frozenset({"queued", "unknown"})
@@ -135,7 +134,7 @@ def validate(body):
         }
     if "worker" in body:
         worker = body["worker"]
-        if not isinstance(worker, str) or worker not in WORKERS:
+        if not isinstance(worker, str) or worker not in known_worker_labels():
             raise DashboardTaskError("invalid_event", 400)
         fields["worker"] = worker
     if "run_id" in body:
@@ -270,7 +269,10 @@ def dispatch(tasks, request, body, fields):
         references = fields.get("attachments")
         worker = fields.get("worker", "hermes" if references else "codex")
         bound.capabilities = tasks.capabilities(bound, refresh=True)
-        if worker == "codex" and not codex_worker_available(bound.capabilities):
+        # Availability is a host fact, checked here before anything is staged.
+        # The dispatch chokepoint re-resolves the provider name from the same
+        # capability, so an unavailable worker never reaches a request body.
+        if not worker_available(bound.capabilities, worker):
             raise DashboardTaskError("child_dispatch_unsupported", 409)
         name, arguments = "delegate_task", {"task": fields["text"], "worker": worker}
         if references:

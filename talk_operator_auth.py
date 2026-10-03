@@ -60,7 +60,8 @@ READ_ONLY_TALK_TOOLS = frozenset(
     }
 )
 MUTATING_TALK_TOOLS = frozenset(
-    {"delegate_task", "steer_agent", "redirect_agent", "stop_work", "resolve_approval"}
+    {"delegate_task", "steer_agent", "redirect_agent", "stop_work", "resolve_approval",
+     "nerve_status", "nerve_explain", "nerve_assess", "nerve_request_review"}
 )
 
 MUTATION_DENIAL = (

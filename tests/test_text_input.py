@@ -91,6 +91,7 @@ class SeamHost(SteeringHost, CatalogHost):
         self.before_steer = self.before_target = self.drop = None
         self.read_unavailable, self.receipt_override = False, None
         self.codex_worker = True
+        self.extra_workers = ()
         self.bridge = Bridge()
         # (entered, release) events: park the next passive-history reconcile read. It is
         # the first host read after the operator's words are committed and before tool().
@@ -122,7 +123,7 @@ class SeamHost(SteeringHost, CatalogHost):
         if self.codex_worker and path.endswith("/v1/capabilities"):
             data = response.json()
             data["features"]["linked_child_dispatch"]["external_workers"] = {
-                "version": 1, "names": ["hermes-talk-codex"],
+                "version": 1, "names": ["hermes-talk-codex", *self.extra_workers],
             }
             return self.response(200, data)
         return response
@@ -511,6 +512,48 @@ def test_start_worker_refused_when_codex_worker_unavailable(seam):
             assert hermes.status_code == 200 and hermes.json()["state"] == "accepted"
             [(_, body)] = seam.host.posts("/v1/runs")
             assert "worker" not in body["child"] and body["input"] == "Start the worker"
+
+    asyncio.run(run())
+
+
+def test_a_second_advertised_worker_dispatches_its_own_provider_name(seam):
+    """The picker is driven by the host advertisement, not a fixed Hermes/Codex pair."""
+
+    async def run():
+        async with client_for(seam) as client:
+            owner = context(await attach(client))
+            seam.host.extra_workers = ("hermes-talk-nerve-ssh",)
+            reply = await send(client, owner, "start_worker", "Run it on win4060", "nerve",
+                               worker="nerve")
+            assert reply.status_code == 200, reply.text
+            [(_, body)] = seam.host.posts("/v1/runs")
+            assert body["child"]["worker"] == "hermes-talk-nerve-ssh"
+
+    asyncio.run(run())
+
+
+def test_an_unadvertised_worker_is_refused_before_anything_is_staged(seam):
+    async def run():
+        async with client_for(seam) as client:
+            owner = context(await attach(client))
+            # "nerve" is a label this build understands, but this host does not
+            # advertise its provider, so it must be refused rather than retried
+            # as codex or hermes.
+            reply = await send(client, owner, "start_worker", "Run it", "no-nerve",
+                               worker="nerve")
+            assert reply.status_code == 409 and code(reply) == "child_dispatch_unsupported"
+            assert not seam.host.posts("/v1/runs") and not seam.host.jobs
+
+    asyncio.run(run())
+
+
+def test_an_unknown_worker_name_is_a_bad_request_not_a_conflict(seam):
+    async def run():
+        async with client_for(seam) as client:
+            owner = context(await attach(client))
+            reply = await send(client, owner, "start_worker", "Run it", "banana", worker="banana")
+            assert reply.status_code == 400 and code(reply) == "invalid_event"
+            assert not seam.host.posts("/v1/runs")
 
     asyncio.run(run())
 

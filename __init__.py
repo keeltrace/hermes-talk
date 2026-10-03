@@ -29,6 +29,7 @@ try:
         talk_discord,
         talk_host,
         talk_lifecycle,
+        talk_nerve_provider,
         talk_progress,
         talk_providers,
         talk_tools,
@@ -43,6 +44,7 @@ except ImportError:  # pragma: no cover - flat-module fallback (pip -e install)
     import talk_discord
     import talk_host
     import talk_lifecycle
+    import talk_nerve_provider
     import talk_progress
     import talk_providers
     import talk_tools
@@ -398,12 +400,22 @@ def register(ctx) -> None:
 
     register_worker = getattr(ctx, "register_task_worker_provider", None)
     if callable(register_worker):
-        provider = talk_codex_provider.build_provider(ctx)
-        if provider is not None:
+        # hermes-nerve-talk overlay: all workers still enter through Hermes'
+        # canonical task-worker provider contract. No direct SSH fallback.
+        for provider in (
+            talk_codex_provider.build_provider(ctx),
+            talk_nerve_provider.build_provider(ctx),
+        ):
+            if provider is None:
+                continue
             try:
                 register_worker(provider)
             except Exception as exc:  # noqa: BLE001 - optional registration preserves other surfaces
-                logger.warning("Talk task-worker registration failed: %s", type(exc).__name__)
+                logger.warning(
+                    "Talk task-worker registration failed for %s: %s",
+                    getattr(provider, "name", "unknown"),
+                    type(exc).__name__,
+                )
 
     _attempt_registration(
         ctx,

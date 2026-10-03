@@ -6,10 +6,10 @@ import math
 from dataclasses import asdict, dataclass
 
 try:
-    from .talk_passive import HistoryOwner, digest, identifier, session_id
+    from .talk_passive import HistoryError, HistoryOwner, digest, identifier, session_id
     from .talk_progress import phase_for_api_event, tool_label
 except ImportError:  # pragma: no cover - flat plugin load
-    from talk_passive import HistoryOwner, digest, identifier, session_id
+    from talk_passive import HistoryError, HistoryOwner, digest, identifier, session_id
     from talk_progress import phase_for_api_event, tool_label
 
 
@@ -103,6 +103,11 @@ class TaskObservation:
     label: str | None = None
     approval_id: str | None = None
     canonical_revision: int | None = None
+    #: Nerve supervision facts. ``nerve_task_id`` is the exact canonical task the
+    #: receipt was fetched for; ``nerve_level`` is the policy verdict, never the
+    #: prose Nerve returned. Both stay None for every non-Nerve observation.
+    nerve_task_id: str | None = None
+    nerve_level: str | None = None
 
     def wire(self):
         return asdict(self)
@@ -228,4 +233,44 @@ def hook_observation(
         binding.origin_turn_id,
         label=tool_label(payload.get("tool_name")) if kind == "post_tool_call" else None,
         approval_id=identifier(request_id) if request_id is not None else None,
+    )
+
+
+NERVE_KIND = "nerve_supervision"
+
+
+def nerve_observation(
+    *,
+    observation_id: str,
+    binding: RunReference,
+    task_id: str,
+    decision,
+) -> TaskObservation:
+    """Project one policy-admitted Nerve verdict into Talk's canonical lane.
+
+    Correlation is by the exact task the receipt was fetched for plus the run
+    binding, never by recency. ``label`` carries plugin-owned wording bounded by
+    the policy; no Nerve or worker prose reaches the speech queue.
+    """
+
+    try:
+        task = identifier(task_id)
+    except HistoryError:
+        # The task-event substrate reports fixed codes; a malformed id must not
+        # leak a different exception type to the caller.
+        raise TaskEventError("invalid_event") from None
+    level = str(getattr(decision, "level", "") or "")
+    if level not in {"quiet", "notify", "urgent"}:
+        raise TaskEventError("invalid_event")
+    summary = " ".join(str(getattr(decision, "summary", "") or "").split())[:280]
+    return TaskObservation(
+        digest([NERVE_KIND, task, binding.local_run_id, getattr(decision, "key", "")]),
+        NERVE_KIND,
+        binding.worker_session_id or session_id(f"nerve-{binding.local_run_id}"),
+        binding.local_run_id,
+        binding.request_id,
+        binding.origin_turn_id,
+        label=summary or None,
+        nerve_task_id=task,
+        nerve_level=level,
     )

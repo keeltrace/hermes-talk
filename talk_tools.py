@@ -37,6 +37,7 @@ try:
         talk_doctor,
         talk_host,
         talk_identity,
+        talk_nerve_tools,
         talk_pause,
         talk_runs,
         talk_steer,
@@ -52,6 +53,7 @@ except ImportError:  # pragma: no cover - flat-module fallback (Hermes file-path
     import talk_doctor
     import talk_host
     import talk_identity
+    import talk_nerve_tools
     import talk_pause
     import talk_runs
     import talk_steer
@@ -465,6 +467,9 @@ def default_talk_tools(*, pausable: bool = False) -> list[dict]:
         _TOOL_TALK_STATUS,
         _TOOL_TALK_CAPABILITIES,
     ]
+    # hermes-nerve-talk overlay: Nerve tools are advertised only when the
+    # exact plugin is loaded and Hermes exposes safe tool dispatch.
+    tools.extend(talk_nerve_tools.tool_schemas())
     if pausable:
         tools.append(_TOOL_PAUSE_VOICE_INPUT)
     try:
@@ -881,6 +886,9 @@ _HANDLERS = {
     "talk_capabilities": _handle_talk_capabilities,
     "pause_voice_input": _handle_pause_voice_input,
 }
+# hermes-nerve-talk overlay: handlers stay in their own module so the
+# upstream Talk dispatcher remains the one execution chokepoint.
+_HANDLERS.update(talk_nerve_tools.handlers())
 
 
 __all__ = [

@@ -137,6 +137,11 @@ def test_no_handler_is_orphaned():
     advertised = {tool["name"] for tool in talk_tools.default_talk_tools()}
     advertised.add("search_vault")  # conditional, absent when unservable
     advertised.add("pause_voice_input")  # conditional, absent without a way to resume
+    # The Nerve supervision tools are conditional the same way: the handler is
+    # registered so a live session can dispatch it, but the schema is
+    # advertised only when the Nerve plugin is actually loaded in this profile.
+    # tests/test_nerve_overlay.py pins both directions of that gate.
+    advertised.update(talk_tools.talk_nerve_tools.handlers())
 
     assert set(talk_tools._HANDLERS) == advertised
 
