@@ -44,7 +44,14 @@ try:
     from .talk_speech_timing import SpeechTiming
     from .talk_task_events import SpeechAttempt, TaskEvents
     from .talk_task_sources import TaskEventError
-    from .talk_worker_recipients import TalkWorkerRecipients, WorkerRecipientBackend
+    from .talk_worker_recipients import (
+        TalkWorkerRecipients,
+        WorkerRecipientBackend,
+        known_worker_labels,
+        worker_available,
+        worker_labels,
+        worker_provider_name,
+    )
 except ImportError:  # pragma: no cover - flat plugin load
     import talk_input_attachments
     from talk_attachment import HistoryDelivery, TalkAttachment
@@ -73,7 +80,14 @@ except ImportError:  # pragma: no cover - flat plugin load
     from talk_speech_timing import SpeechTiming
     from talk_task_events import SpeechAttempt, TaskEvents
     from talk_task_sources import TaskEventError
-    from talk_worker_recipients import TalkWorkerRecipients, WorkerRecipientBackend
+    from talk_worker_recipients import (
+        TalkWorkerRecipients,
+        WorkerRecipientBackend,
+        known_worker_labels,
+        worker_available,
+        worker_labels,
+        worker_provider_name,
+    )
 
 BOUND_TOOLS = frozenset(
     {
@@ -94,11 +108,13 @@ CHILD_TOOLS = frozenset({"delegate_task", "search_memory", "search_vault"})
 
 
 def codex_worker_available(capabilities):
-    feature = capabilities.get("features", {}).get("linked_child_dispatch", {})
-    support = feature.get("external_workers", {})
-    return (isinstance(support, dict) and type(support.get("version")) is int
-            and support["version"] == 1 and isinstance(support.get("names"), list)
-            and "hermes-talk-codex" in support["names"])
+    """Retained for the Codex-specific capability probe; the picker below is generic."""
+    return worker_available(capabilities, "codex")
+
+
+def available_workers(capabilities):
+    """The worker labels this host advertises, for the model-facing tool surface."""
+    return list(worker_labels(capabilities))
 
 
 def update_preference_tool():
@@ -529,8 +545,7 @@ class DashboardTasks:
         features = self.capabilities(bound).get("features", {})
         return json.dumps({
             "delegation": "Hermes owns actions and their canonical receipts",
-            "workers": ["hermes", "codex"] if codex_worker_available(bound.capabilities)
-            else ["hermes"],
+            "workers": available_workers(bound.capabilities),
             "existing_app_recipients": features.get("recipient_bridge", {"state": "unknown"}),
             "computer_use": features.get("computer_use", {"state": "unknown"}),
             "unknown_capability": "Ask Hermes to verify on the selected execution host",
@@ -776,13 +791,21 @@ class DashboardTasks:
                     },
                 }
                 worker = arguments.get("worker", "hermes")
-                if (not isinstance(worker, str) or worker not in {"hermes", "codex"}
-                    or (worker != "hermes" and name != "delegate_task")):
+                if (
+                    not isinstance(worker, str)
+                    or worker not in known_worker_labels()
+                    or (worker != "hermes" and name != "delegate_task")
+                ):
                     raise DashboardTaskError("unsupported_tool", 400)
-                if worker == "codex":
-                    if not codex_worker_available(bound.capabilities):
-                        raise DashboardTaskError("child_dispatch_unsupported", 409)
-                    action["request_body"]["child"]["worker"] = "hermes-talk-codex"
+                # The provider name is resolved from what THIS host advertises,
+                # never taken as free text from the model, and an unavailable
+                # worker is refused rather than silently swapped for another.
+                try:
+                    provider = worker_provider_name(bound.capabilities, worker)
+                except LookupError:
+                    raise DashboardTaskError("child_dispatch_unsupported", 409) from None
+                if provider is not None:
+                    action["request_body"]["child"]["worker"] = provider
                 references = arguments.get("attachments")
                 if references:
                     # The one chokepoint every dispatch passes, typed route or model

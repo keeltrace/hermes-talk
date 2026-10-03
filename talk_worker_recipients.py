@@ -24,6 +24,73 @@ except ImportError:  # pragma: no cover - flat plugin load
 APP = "codex_worker"
 IDENTITY_FIELDS = ("recipient_id", "app", "task_id", "target_token")
 
+#: Host-advertised external worker provider name -> the short label the operator
+#: and the model use. The provider name is DATA from Hermes: this table only
+#: supplies the friendly alias, so a provider Hermes does not advertise can
+#: never be selected, and a new provider needs no change to the picker.
+WORKER_PROVIDER_LABELS = {
+    "hermes-talk-codex": "codex",
+    "hermes-talk-nerve-ssh": "nerve",
+}
+#: The built-in worker is always selectable; it is not an external provider.
+DEFAULT_WORKER_LABEL = "hermes"
+
+
+def worker_labels(capabilities):
+    """Return the worker labels this host actually advertises.
+
+    Derived from the host's own ``external_workers`` capability, so the model is
+    never offered a worker the host cannot prove it has.
+    """
+
+    feature = (capabilities or {}).get("features", {}).get("linked_child_dispatch", {})
+    support = feature.get("external_workers", {})
+    if not (
+        isinstance(support, dict)
+        and type(support.get("version")) is int
+        and support["version"] == 1
+        and isinstance(support.get("names"), list)
+    ):
+        return (DEFAULT_WORKER_LABEL,)
+    advertised = {name for name in support["names"] if isinstance(name, str)}
+    labels = [
+        label
+        for provider, label in WORKER_PROVIDER_LABELS.items()
+        if provider in advertised
+    ]
+    return (DEFAULT_WORKER_LABEL, *sorted(labels))
+
+
+def worker_available(capabilities, label):
+    return label in worker_labels(capabilities)
+
+
+def known_worker_labels():
+    """Every label this build understands, advertised or not.
+
+    Separates "the model named a worker that does not exist" (a bad request)
+    from "this host cannot prove it has that worker" (a conflict).
+    """
+    return frozenset({DEFAULT_WORKER_LABEL, *WORKER_PROVIDER_LABELS.values()})
+
+
+def worker_provider_name(capabilities, label):
+    """Resolve a short label to the exact provider name to dispatch.
+
+    Returns ``None`` for the built-in Hermes worker, which Hermes dispatches
+    without a provider name. Raises for an unknown or unadvertised label rather
+    than falling back to a different worker.
+    """
+
+    if label == DEFAULT_WORKER_LABEL:
+        return None
+    for provider, known in WORKER_PROVIDER_LABELS.items():
+        if known == label:
+            if not worker_available(capabilities, label):
+                raise LookupError(label)
+            return provider
+    raise LookupError(label)
+
 
 def _id(value):
     return (
@@ -39,6 +106,9 @@ class TalkWorkerRecipients:
 
     def _jobs(self):
         token = self.bound.token
+        # Every provider this host advertises is an owned Talk worker; an
+        # unfamiliar provider name is not one of ours and is never projected.
+        owned = set(WORKER_PROVIDER_LABELS)
         with self.bound.stages._db(token, write=False) as db:
             rows = db.execute(
                 "SELECT a.record,i.record FROM dashboard_actions a "
@@ -59,7 +129,7 @@ class TalkWorkerRecipients:
                 or not _id(action.get("action_id"))
                 or type(action.get("run_id")) is not int
                 or action["run_id"] < 1
-                or child.get("worker") != "hermes-talk-codex"
+                or child.get("worker") not in owned
                 or child.get("correlation_id") != action["action_id"]
                 or request.get("session_id") != token.owner.session_id
                 or record.get("canonical_state") != "saved"
@@ -92,12 +162,14 @@ class TalkWorkerRecipients:
             ]
         )
         title = " ".join(str(action.get("goal") or "Existing background task").split())[:360]
+        provider = (action.get("request_body") or {}).get("child", {}).get("worker")
+        label = WORKER_PROVIDER_LABELS.get(provider, "worker").capitalize()
         return {
             "recipient_id": "talk-worker-" + digest([owner.key, action["action_id"]]),
             "host_id": owner.host,
             "app": APP,
             "task_id": action["api_run_id"],
-            "title": f"Codex worker #{action['run_id']}: {title}",
+            "title": f"{label} worker #{action['run_id']}: {title}",
             "target_token": "talk-worker-" + proof,
             "proven_control": "worker",
             "operations": ["status", "steer_work"],
